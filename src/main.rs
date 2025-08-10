@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use std::env;
 use std::error::Error;
 use std::io::{self, Write};
+use log::info;
 
 // --- 1. COMMON TYPES ---
 
@@ -117,7 +118,7 @@ mod rag {
 
         /// Adds a document to our database, automatically creating embeddings.
         pub async fn add_document(&mut self, doc: &str) -> Result<(), Box<dyn Error>> {
-            println!("Embedding document: \"{}\"", doc);
+            info!("Embedding document: \"{}\"", doc);
             let embedding = self.get_embeddings(doc).await?;
             self.documents.push((doc.to_string(), embedding));
             Ok(())
@@ -235,7 +236,7 @@ mod tools {
         messages: &mut Vec<Message>,
     ) -> Result<String, Box<dyn Error>> {
         if tool_call.function.name == "search_web" {
-            println!("> Tool call: search_web");
+            info!("> Tool call: search_web");
             let args: Value = serde_json::from_str(&tool_call.function.arguments)?;
             let query = args["query"].as_str().ok_or("Missing query for search_web")?;
             let search_result = search_web(query, serp_api_key).await?;
@@ -294,6 +295,7 @@ async fn call_llm_api(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenv().ok();
+    env_logger::init();
     let serp_api_key = env::var("SERP_API_KEY").expect("SERP_API_KEY must be set in .env file");
     let llm_url = "http://localhost:8080";
     let embeddings_url = "http://localhost:8081/embedding";
@@ -307,7 +309,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     db.add_document("The secret code to access the project is 'quantum_leap_42'.").await?;
     db.add_document("Alice is the lead engineer for the new 'Orion' feature.").await?;
     db.add_document("The project deadline has been moved to next Friday.").await?;
-    println!("\nVector DB is ready.");
+    info!("\nVector DB is ready.");
 
     // --- Main Loop ---
     println!("\nWelcome! I am a helpful assistant. How can I help you today?");
@@ -336,16 +338,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         match mode {
             // TODO: Implement RAG
             "1" => {
-                println!("> RAG Mode: Searching internal documents...");
+                info!("> RAG Mode: Searching internal documents...");
                 let context = db.find_most_similar(user_input).await?;
                 let augmented_prompt = if let Some((ctx, score)) = context {
-                    println!("> Found relevant context: \"{}\", with score: {}", ctx, score);
+                    info!("> Found relevant context: \"{}\", with score: {}", ctx, score);
                     format!(
                         "Answer the user's query based *only* on the following context.\n\nContext: \"{}\"\n\nUser query: {}",
                         ctx, user_input
                     )
                 } else {
-                    println!("> No relevant context found in internal documents for your query.");
+                    info!("> No relevant context found in internal documents for your query.");
                     // We still send the query to the LLM, which might respond that it cannot answer.
                     user_input.to_string()
                 };
@@ -364,7 +366,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
             // TODO: Implement tool calling
             "2" => {
-                println!("> Tool Mode: Searching the web...");
+                info!("> Tool Mode: Searching the web...");
                 let mut tool_messages = messages.clone();
                 tool_messages.push(Message { role: "user".to_string(), content: user_input.to_string() });
 
@@ -374,7 +376,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 if let Some(tool_calls) = &assistant_message.tool_calls {
                     for tool_call in tool_calls {
                         let tool_result = tools::execute_tool_call(tool_call, &serp_api_key, &mut tool_messages).await?;
-                        println!("> Tool result: {}", tool_result);
+                        info!("> Tool result: {}", tool_result);
                     }
 
                     let final_response = call_llm_api(&client, llm_url, model, tool_messages, false).await?;
