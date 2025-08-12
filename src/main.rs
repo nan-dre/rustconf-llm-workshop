@@ -61,11 +61,31 @@ pub struct ChatCompletion {
     pub choices: Vec<Choice>,
 }
 
+// --- Streaming-related structs ---
+#[derive(Deserialize, Debug)]
+pub struct ChatCompletionChunk {
+    pub choices: Vec<ChoiceChunk>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ChoiceChunk {
+    pub delta: Delta,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct Delta {
+    #[serde(default)]
+    pub content: Option<String>,
+}
+// --- End of streaming-related structs ---
+
 #[derive(Serialize, Debug)]
 pub struct ChatRequest {
     pub model: String,
     pub messages: Vec<Message>,
     pub tools: Vec<Tool>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub stream: bool,
 }
 
 // --- 2. RETRIEVAL-AUGMENTED GENERATION (RAG) ---
@@ -193,6 +213,27 @@ mod tools {
                     "required": ["query"]
                 }),
             },
+        },
+        Tool {
+            r#type: "function".to_string(),
+            function: Function {
+                name: "add".to_string(),
+                description: "Adds two numbers.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "num1": {
+                            "type": "integer",
+                            "description": "The first number."
+                        },
+                        "num2": {
+                            "type": "integer",
+                            "description": "The second number."
+                        }
+                    },
+                    "required": ["num1", "num2"]
+                }),
+            },
         }]
     }
 
@@ -226,6 +267,10 @@ mod tools {
 
         Ok(results)
     }
+    
+    async fn add(num1: i32, num2: i32) -> Result<i32, Box<dyn Error>> {
+        Ok(num1 + num2)
+    }
 
     /// TODO: Parse the tool call from the LLM and execute the corresponding function.
     /// This function acts as a router. When the LLM requests a tool, this function
@@ -251,6 +296,23 @@ mod tools {
                 content: format!("<tool result: {}>", search_result),
             });
             Ok(format!("Search results: {}", search_result))
+        } else if tool_call.function.name == "add" {
+            let args: Value = serde_json::from_str(&tool_call.function.arguments)?;
+            let num1 = args["num1"].as_i64().ok_or("Missing num1 for add")?;
+            let num2 = args["num2"].as_i64().ok_or("Missing num2 for add")?;
+            let sum = add(num1 as i32, num2 as i32).await?;
+
+            messages.push(Message {
+                role: "assistant".to_string(),
+                content: format!("<tool call: {} with num1: {}, num2: {}>", tool_call.function.name, num1, num2),
+            });
+
+            messages.push(Message {
+                role: "user".to_string(),
+                content: format!("<tool result: {}>", sum),
+            });
+
+            Ok(format!("Addition result: {}", sum))
         } else {
             Err(format!("Unknown tool: {}", tool_call.function.name).into())
         }
@@ -267,7 +329,8 @@ async fn call_llm_api(
     model: &str,
     messages: Vec<Message>,
     use_tools: bool,
-) -> Result<ChatCompletion, Box<dyn Error>> {
+    stream: bool,
+) -> Result<reqwest::Response, Box<dyn Error>> {
     let tools = if use_tools {
         tools::get_tools_definition()
     } else {
@@ -278,14 +341,13 @@ async fn call_llm_api(
         model: model.to_string(),
         messages,
         tools: tools,
+        stream,
     };
 
     let res = client
         .post(format!("{}/v1/chat/completions", llm_url))
         .json(&request)
         .send()
-        .await?
-        .json::<ChatCompletion>()
         .await?;
 
     Ok(res)
@@ -328,7 +390,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
 
         // --- Let the user choose the mode ---
-        println!("Choose mode: (1) RAG (Internal Docs), (2) Tool Search (Web)");
+        println!("Choose mode: (1) Simple response, (2) RAG (Internal Docs), (3) Tool Search (Web)");
         print!("Mode: ");
         io::stdout().flush()?;
         let mut mode_input = String::new();
@@ -336,8 +398,40 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let mode = mode_input.trim();
 
         match mode {
-            // TODO: Implement RAG
+            // TODO: Implement simple response
             "1" => {
+                info!("> Simple Mode: Generating a response...");
+                messages.push(Message { role: "user".to_string(), content: user_input.to_string() });
+                let mut response_stream = call_llm_api(&client, llm_url, model, messages.clone(), false, true).await?;
+                
+                print!("ASSISTANT: ");
+                io::stdout().flush()?;
+
+                let mut full_response = String::new();
+                while let Some(chunk) = response_stream.chunk().await? {
+                    let chunk_str = std::str::from_utf8(&chunk)?;
+                    for line in chunk_str.lines() {
+                        if line.starts_with("data: ") {
+                            let json_str = &line[6..];
+                            if json_str != "[DONE]" {
+                                if let Ok(parsed_chunk) = serde_json::from_str::<ChatCompletionChunk>(json_str) {
+                                    if let Some(choice) = parsed_chunk.choices.first() {
+                                        if let Some(content) = &choice.delta.content {
+                                            print!("{}", content);
+                                            io::stdout().flush()?;
+                                            full_response.push_str(content);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                println!();
+                messages.push(Message { role: "assistant".to_string(), content: full_response });
+            }
+            // TODO: Implement RAG
+            "2" => {
                 info!("> RAG Mode: Searching internal documents...");
                 let context = db.find_most_similar(user_input).await?;
                 let augmented_prompt = if let Some((ctx, score)) = context {
@@ -355,7 +449,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let mut rag_messages = messages.clone();
                 rag_messages.push(Message { role: "user".to_string(), content: augmented_prompt });
 
-                let response = call_llm_api(&client, llm_url, model, rag_messages, false).await?;
+                let response = call_llm_api(&client, llm_url, model, rag_messages, false, false).await?.json::<ChatCompletion>().await?;
                 if let Some(content) = &response.choices[0].message.content {
                     println!("ASSISTANT: {}", content);
                     messages.push(Message { role: "user".to_string(), content: user_input.to_string() });
@@ -365,12 +459,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
             // TODO: Implement tool calling
-            "2" => {
+            "3" => {
                 info!("> Tool Mode: Searching the web...");
                 let mut tool_messages = messages.clone();
                 tool_messages.push(Message { role: "user".to_string(), content: user_input.to_string() });
 
-                let response = call_llm_api(&client, llm_url, model, tool_messages.clone(), true).await?;
+                let response = call_llm_api(&client, llm_url, model, tool_messages.clone(), true, false).await?.json::<ChatCompletion>().await?;
                 let assistant_message = &response.choices[0].message;
 
                 if let Some(tool_calls) = &assistant_message.tool_calls {
@@ -379,7 +473,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         info!("> Tool result: {}", tool_result);
                     }
 
-                    let final_response = call_llm_api(&client, llm_url, model, tool_messages, false).await?;
+                    let final_response_res = call_llm_api(&client, llm_url, model, tool_messages, false, false).await?;
+                    let final_response = final_response_res.json::<ChatCompletion>().await?;
                     if let Some(content) = &final_response.choices[0].message.content {
                         println!("ASSISTANT: {}", content);
                         messages.push(Message { role: "user".to_string(), content: user_input.to_string() });
