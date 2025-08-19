@@ -73,29 +73,11 @@ pub struct ChatCompletion {
     pub choices: Vec<Choice>,
 }
 
-#[derive(Deserialize, Debug)]
-pub struct ChatCompletionChunk {
-    pub choices: Vec<ChoiceChunk>,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct ChoiceChunk {
-    pub delta: Delta,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct Delta {
-    #[serde(default)]
-    pub content: Option<String>,
-}
-
 #[derive(Serialize, Debug)]
 pub struct ChatRequest {
     pub model: String,
     pub messages: Vec<Message>,
     pub tools: Vec<Tool>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub stream: bool,
 }
 
 // --- 2. RETRIEVAL-AUGMENTED GENERATION (RAG) ---
@@ -261,7 +243,6 @@ mod tools {
 ///     - `model`: Use the `model` parameter.
 ///     - `messages`: Use the `messages` parameter.
 ///     - `tools`: If `use_tools` is true, call `tools::get_tools_definition()`. Otherwise, use an empty vector.
-///     - `stream`: Use the `stream` parameter.
 /// 2.  Use the `reqwest::Client` to make a POST request.
 ///     - The URL should be `"{llm_url}/v1/chat/completions"`.
 ///     - Send the `ChatRequest` as JSON using the `.json()` method.
@@ -273,46 +254,26 @@ async fn call_llm_api(
     model: &str,
     messages: Vec<Message>,
     use_tools: bool,
-    stream: bool,
-) -> Result<reqwest::Response, Box<dyn Error>> {
+) -> Result<ChatCompletion, Box<dyn Error>> {
     // Your implementation here
     Err("LLM API call not implemented".into())
 }
 
 // --- 5. AGENT LOGIC ---
 
-/// Handles a simple, streaming response from the LLM.
+/// Handles a simple response from the LLM.
 async fn handle_simple_response(client: &Client, llm_url: &str, model: &str, messages: &mut Vec<Message>, user_input: &str) -> Result<(), Box<dyn Error>> {
     info!("> Simple Mode: Generating a response...");
     messages.push(Message { role: "user".to_string(), content: user_input.to_string() });
-    
-    let mut response_stream = call_llm_api(client, llm_url, model, messages.clone(), false, true).await?;
-    
-    print!("ASSISTANT: ");
-    io::stdout().flush()?;
 
-    let mut full_response = String::new();
-    while let Some(chunk) = response_stream.chunk().await? {
-        let chunk_str = std::str::from_utf8(&chunk)?;
-        for line in chunk_str.lines() {
-            if line.starts_with("data: ") {
-                let json_str = &line[6..];
-                if json_str != "[DONE]" {
-                    if let Ok(parsed_chunk) = serde_json::from_str::<ChatCompletionChunk>(json_str) {
-                        if let Some(choice) = parsed_chunk.choices.first() {
-                            if let Some(content) = &choice.delta.content {
-                                print!("{}", content);
-                                io::stdout().flush()?;
-                                full_response.push_str(content);
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    let response = call_llm_api(&client, llm_url, model, messages.clone(), false).await?;
+    if let Some(content) = &response.choices[0].message.content {
+        println!("ASSISTANT: {}", content);
+        messages.push(Message { role: "user".to_string(), content: user_input.to_string() });
+        messages.push(Message { role: "assistant".to_string(), content: content.clone() });
+    } else {
+        println!("ASSISTANT: <no response>");
     }
-    println!();
-    messages.push(Message { role: "assistant".to_string(), content: full_response });
     Ok(())
 }
 
@@ -335,7 +296,7 @@ async fn handle_rag_response(client: &Client, llm_url: &str, model: &str, db: &r
     let mut rag_messages = messages.clone();
     rag_messages.push(Message { role: "user".to_string(), content: augmented_prompt });
 
-    let response = call_llm_api(client, llm_url, model, rag_messages, false, false).await?.json::<ChatCompletion>().await?;
+    let response = call_llm_api(client, llm_url, model, rag_messages, false).await?;
     if let Some(content) = &response.choices[0].message.content {
         println!("ASSISTANT: {}", content);
         messages.push(Message { role: "user".to_string(), content: user_input.to_string() });
@@ -353,7 +314,7 @@ async fn handle_tool_response(client: &Client, llm_url: &str, model: &str, messa
     tool_messages.push(Message { role: "user".to_string(), content: user_input.to_string() });
 
     // First, call the LLM to see if it wants to use a tool.
-    let response = call_llm_api(client, llm_url, model, tool_messages.clone(), true, false).await?.json::<ChatCompletion>().await?;
+    let response = call_llm_api(client, llm_url, model, tool_messages.clone(), true).await?;
     let assistant_message = &response.choices[0].message;
 
     if let Some(tool_calls) = &assistant_message.tool_calls {
@@ -367,7 +328,7 @@ async fn handle_tool_response(client: &Client, llm_url: &str, model: &str, messa
         }
 
         // Now, call the LLM again with the tool results to get a final answer.
-        let final_response = call_llm_api(client, llm_url, model, tool_messages, false, false).await?.json::<ChatCompletion>().await?;
+        let final_response = call_llm_api(client, llm_url, model, tool_messages, false).await?;
         if let Some(content) = &final_response.choices[0].message.content {
             println!("ASSISTANT: {}", content);
             messages.push(Message { role: "user".to_string(), content: user_input.to_string() });
