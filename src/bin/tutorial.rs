@@ -108,6 +108,7 @@ mod rag {
             }
         }
 
+        // This function retrieves the embeddings for a given text.
         async fn get_embeddings(&self, text: &str) -> Result<Vec<f32>, Box<dyn Error>> {
             let payload = json!({ "content": text });
             let response: Vec<EmbeddingResponse> = self
@@ -128,56 +129,39 @@ mod rag {
 
         pub async fn add_document(&mut self, doc: &str) -> Result<(), Box<dyn Error>> {
             info!("Embedding document: \"{}\"", doc);
-            let embedding = self.get_embeddings(doc).await?;
-            self.documents.push((doc.to_string(), embedding));
+            // TODO 3.0: Embed the document and add it to the toy vector database - self.documents in this case.
+
             Ok(())
         }
 
         pub async fn find_most_similar(&self, query: &str) -> Result<Option<(String, f32)>, Box<dyn Error>> {
             const SIMILARITY_THRESHOLD: f32 = 0.1;
 
-            let query_embedding = self.get_embeddings(query).await?;
-            let mut best_match: Option<(&str, f32)> = None;
+            // TODO 3.1: Get the embedding for the user's query.
 
-            // TODO 3: Find the document most similar to the user's query.
+            // TODO 3.2: Find the document most similar to the user's query.
             // Iterate through `self.documents`. For each `(doc, doc_embedding)`, calculate the
             // `cosine_similarity` with the `query_embedding`. If the similarity is the best
             // so far, update `best_match`.
-            //
-            // Example:
-            // for (doc, doc_embedding) in &self.documents {
-            //     let similarity = cosine_similarity(&query_embedding, doc_embedding);
-            //     if best_match.is_none() || similarity > best_match.unwrap().1 {
-            //         best_match = Some((doc, similarity));
-            //     }
-            // }
 
-            if let Some((doc, score)) = best_match {
-                if score > SIMILARITY_THRESHOLD {
-                    return Ok(Some((doc.to_string(), score)));
-                }
-            }
 
+            // TODO 3.3: Check if the similarity for the best match is above the SIMILARITY_THRESHOLD.
+            // You can play around with the threshold value to see how it affects the results.
+            
             Ok(None)
         }
     }
 
     /// Calculates the cosine similarity between two vectors.
     fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-        // TODO 3: Calculate the cosine similarity of vectors `a` and `b`.
+        // TODO 3.2: Calculate the cosine similarity of vectors `a` and `b`.
         // The formula is: (A · B) / (||A|| * ||B||)
-        //
-        // 1.  **Dot Product (A · B)**: This is the sum of the products of corresponding elements.
+        // 1.  Dot Product (A · B) - this is the sum of the products of corresponding elements.
         //     Formula: Σ(a_i * b_i)
-        //
-        // 2.  **L2 Norm (Magnitude ||A||)**: This is the square root of the sum of the squares of the elements.
+        // 2.  L2 Norm - this is the square root of the sum of the squares of the elements.
         //     Formula: sqrt(Σ(a_i^2))
-        //
-        // 3.  **Calculate**: Compute the L2 norm for both `a` and `b`, then divide the dot product
-        //     by the product of the two norms.
-        //
-        // 4.  **Edge Case**: If either norm is 0.0, return 0.0 to prevent division by zero.
-        0.0 // Placeholder
+        // 3.  If either norm is 0.0, return 0.0 to prevent division by zero.
+        0.0
     }
 }
 
@@ -190,10 +174,12 @@ mod tools {
     /// Defines the tools our LLM can use.
     pub fn get_tools_definition() -> Vec<Tool> {
         vec![
-            // TODO 2: Define a tool named `calculate`.
-            // It should have a description "Calculates the sum of two numbers."
-            // and take two integer parameters: `num1` and `num2`.
             //
+            // TODO 2: Define a tool named `calculate`.
+            // TODO 2.1: After testing the tool, extend it by adding support for additional operations (subtract, multiply, divide).
+            // You will also need to modify the `calculate` function and the `execute_tool_call` function
+            // Hint: Parameters are defined by a JSON schema, you can use its features, such as enums, descriptions and nested objects.
+
             // Example structure:
             // Tool {
             //     r#type: "function".to_string(),
@@ -247,7 +233,7 @@ mod tools {
 ///     - The URL should be `"{llm_url}/v1/chat/completions"`.
 ///     - Send the `ChatRequest` as JSON using the `.json()` method.
 ///     - `await` the response.
-/// 3.  Return the `reqwest::Response`.
+/// 3.  Return the `ChatCompletion`.
 async fn call_llm_api(
     client: &Client,
     llm_url: &str,
@@ -359,9 +345,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // --- Setup RAG Database ---
     let mut db = rag::VectorDB::new(embeddings_url);
-    db.add_document("The secret code to access the project is 'quantum_leap_42'.").await?;
-    db.add_document("Alice is the lead engineer for the new 'Orion' feature.").await?;
-    db.add_document("The project deadline has been moved to next Friday.").await?;
+    // TODO 3.5: Add internal documents that the model could not know. For example:
+    // The secret code to access the project is 'quantum_leap_42'.
+    // Alice is the lead engineer for the new 'Orion' feature.
+    // The project deadline has been moved to next Friday.
+
     info!("\nVector DB is ready.");
 
     // --- Main Loop ---
@@ -406,3 +394,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
+
+// TODO 4: Congratulations, you implemented a basic agent! If you want to extend it, you can try these other options:
+// 1. Add more tools for the agent to use.
+// 2. Replace the toy RAG implementation with Qdrant.
