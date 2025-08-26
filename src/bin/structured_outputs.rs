@@ -87,7 +87,6 @@ pub struct ResponseFormat {
     pub r#type: String,
     pub name: String,
     pub schema: Schema,
-    pub strict: bool,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -320,6 +319,8 @@ async fn call_llm_api(
         Vec::new()
     };
 
+    info!("> Response format: {:?}", json!(response_format));
+
     let request = ChatRequest {
         model: model.to_string(),
         messages,
@@ -426,7 +427,7 @@ async fn handle_structured_output_response(client: &Client, llm_url: &str, model
     info!("> Structured Output Mode: Extracting information...");
 
     let structured_prompt = format!(
-        "From the following text, extract the name, city, and age.\n\nText: \"{}\"",
+        "From the following text, extract the requested info.\n\nText: \"{}\"",
         user_input
     );
 
@@ -437,13 +438,12 @@ async fn handle_structured_output_response(client: &Client, llm_url: &str, model
         schema: Schema {
             r#type: "object".to_string(),
             properties: vec![
-                json!({"name": "name", "type": "string", "description": "The user's full name."}),
-                json!({"name": "city", "type": "string", "description": "The city where the user lives."}),
-                json!({"name": "age", "type": "integer", "description": "The user's age in years."}),
+                json!({"name": json!({"type": "string"})}),
+                json!({"city": json!({"type": "string"})}),
+                json!({"age": json!({"type": "integer"})}),
             ],
             required: vec!["name".to_string(), "city".to_string(), "age".to_string()],
         },
-        strict: true,
     });
 
     let response = call_llm_api(client, llm_url, model, structured_messages, false, response_format).await?;
