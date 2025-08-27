@@ -78,8 +78,28 @@ pub struct ChatRequest {
     pub model: String,
     pub messages: Vec<Message>,
     pub tools: Vec<Tool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<ResponseFormat>,
 }
 
+#[derive(Serialize, Debug, Clone)]
+pub struct ResponseFormat {
+    pub r#type: String,
+    pub json_schema: JsonSchemaWrapper,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct JsonSchemaWrapper {
+    pub name: String,
+    pub schema: Value,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct UserInfo {
+    name: String,
+    city: String,
+    age: u32,
+}
 // --- 2. RETRIEVAL-AUGMENTED GENERATION (RAG) ---
 // Giving our LLM knowledge about private documents.
 
@@ -240,6 +260,7 @@ async fn call_llm_api(
     model: &str,
     messages: Vec<Message>,
     use_tools: bool,
+    response_format: Option<ResponseFormat>,
 ) -> Result<ChatCompletion, Box<dyn Error>> {
     // Your implementation here
     Err("LLM API call not implemented".into())
@@ -252,7 +273,7 @@ async fn handle_simple_response(client: &Client, llm_url: &str, model: &str, mes
     info!("> Simple Mode: Generating a response...");
     messages.push(Message { role: "user".to_string(), content: user_input.to_string() });
 
-    let response = call_llm_api(&client, llm_url, model, messages.clone(), false).await?;
+    let response = call_llm_api(&client, llm_url, model, messages.clone(), false, None).await?;
     if let Some(content) = &response.choices[0].message.content {
         println!("ASSISTANT: {}", content);
         messages.push(Message { role: "user".to_string(), content: user_input.to_string() });
@@ -282,7 +303,7 @@ async fn handle_rag_response(client: &Client, llm_url: &str, model: &str, db: &r
     let mut rag_messages = messages.clone();
     rag_messages.push(Message { role: "user".to_string(), content: augmented_prompt });
 
-    let response = call_llm_api(client, llm_url, model, rag_messages, false).await?;
+    let response = call_llm_api(client, llm_url, model, rag_messages, false, None).await?;
     if let Some(content) = &response.choices[0].message.content {
         println!("ASSISTANT: {}", content);
         messages.push(Message { role: "user".to_string(), content: user_input.to_string() });
@@ -300,7 +321,7 @@ async fn handle_tool_response(client: &Client, llm_url: &str, model: &str, messa
     tool_messages.push(Message { role: "user".to_string(), content: user_input.to_string() });
 
     // First, call the LLM to see if it wants to use a tool.
-    let response = call_llm_api(client, llm_url, model, tool_messages.clone(), true).await?;
+    let response = call_llm_api(client, llm_url, model, tool_messages.clone(), true, None).await?;
     let assistant_message = &response.choices[0].message;
 
     if let Some(tool_calls) = &assistant_message.tool_calls {
@@ -314,7 +335,7 @@ async fn handle_tool_response(client: &Client, llm_url: &str, model: &str, messa
         }
 
         // Now, call the LLM again with the tool results to get a final answer.
-        let final_response = call_llm_api(client, llm_url, model, tool_messages, false).await?;
+        let final_response = call_llm_api(client, llm_url, model, tool_messages, false, None).await?;
         if let Some(content) = &final_response.choices[0].message.content {
             println!("ASSISTANT: {}", content);
             messages.push(Message { role: "user".to_string(), content: user_input.to_string() });
@@ -327,6 +348,29 @@ async fn handle_tool_response(client: &Client, llm_url: &str, model: &str, messa
         println!("ASSISTANT: {}", content);
         messages.push(Message { role: "user".to_string(), content: user_input.to_string() });
         messages.push(Message { role: "assistant".to_string(), content: content.clone() });
+    }
+    Ok(())
+}
+
+/// Handles a query by extracting structured data.
+async fn handle_structured_output_response(client: &Client, llm_url: &str, model: &str, messages: &mut Vec<Message>, user_input: &str) -> Result<(), Box<dyn Error>> {
+    info!("> Structured Output Mode: Extracting information...");
+
+    let structured_prompt = format!(
+        "From the following text, extract the requested info.\n\nText: \"{}\"",
+        user_input
+    );
+
+    let structured_messages = vec![Message { role: "user".to_string(), content: structured_prompt }];
+    // TODO 5: Define the response_format
+    let response_format = None;
+    let response = call_llm_api(client, llm_url, model, structured_messages, false, response_format).await?;
+
+    if let Some(content) = &response.choices[0].message.content {
+        info!("> LLM raw response: {}", content);
+        // TODO 5: Parse the response
+    } else {
+        println!("ASSISTANT: <no response>");
     }
     Ok(())
 }
@@ -379,6 +423,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "1" => handle_simple_response(&client, llm_url, model, &mut messages, user_input).await,
             "2" => handle_rag_response(&client, llm_url, model, &db, &mut messages, user_input).await,
             "3" => handle_tool_response(&client, llm_url, model, &mut messages, user_input).await,
+            "4" => handle_structured_output_response(&client, llm_url, model, &mut messages, user_input).await,
             _ => {
                 println!("Invalid mode selected. Please enter '1', '2', or '3'.");
                 Ok(())

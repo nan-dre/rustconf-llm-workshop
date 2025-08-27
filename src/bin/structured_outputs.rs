@@ -85,15 +85,13 @@ pub struct ChatRequest {
 #[derive(Serialize, Debug, Clone)]
 pub struct ResponseFormat {
     pub r#type: String,
-    pub name: String,
-    pub schema: Schema,
+    pub json_schema: JsonSchemaWrapper,
 }
 
 #[derive(Serialize, Debug, Clone)]
-pub struct Schema {
-    pub r#type: String,
-    pub properties: Vec<Value>,
-    pub required: Vec<String>,
+pub struct JsonSchemaWrapper {
+    pub name: String,
+    pub schema: Value,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -434,16 +432,18 @@ async fn handle_structured_output_response(client: &Client, llm_url: &str, model
     let structured_messages = vec![Message { role: "user".to_string(), content: structured_prompt }];
     let response_format = Some(ResponseFormat {
         r#type: "json_schema".to_string(),
-        name: "UserInfo".to_string(),
-        schema: Schema {
-            r#type: "object".to_string(),
-            properties: vec![
-                json!({"name": json!({"type": "string"})}),
-                json!({"city": json!({"type": "string"})}),
-                json!({"age": json!({"type": "integer"})}),
-            ],
-            required: vec!["name".to_string(), "city".to_string(), "age".to_string()],
-        },
+        json_schema: JsonSchemaWrapper {
+            name: "UserInfo".to_string(),
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "city": {"type": "string"},
+                    "age": {"type": "integer"}
+                },
+                "required": ["name", "city", "age"]
+            })
+        }
     });
 
     let response = call_llm_api(client, llm_url, model, structured_messages, false, response_format).await?;
